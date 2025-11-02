@@ -1,0 +1,42 @@
+name: Update prod branch to latest Onyx release
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # runs every day at 03:00 UTC
+  workflow_dispatch:     # allows manual trigger from GitHub UI
+
+jobs:
+  update-prod:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout your fork
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Add upstream Onyx repo and fetch all tags
+        run: |
+          git remote add upstream https://github.com/onyx-dot-app/onyx.git
+          git fetch upstream --tags
+
+      - name: Determine latest release tag
+        id: tag
+        run: |
+          LATEST_TAG=$(git ls-remote --tags upstream | awk -F'/' '{print $3}' | grep '^v' | sort -V | tail -n1)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "Latest release tag is: $LATEST_TAG"
+
+      - name: Checkout your prod branch
+        run: |
+          git fetch origin prod
+          git checkout prod
+
+      - name: Merge the latest release into prod
+        run: |
+          git merge $LATEST_TAG --no-edit || true
+
+      - name: Push the updated prod branch to your fork
+        run: |
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/Beaudinn/ai-server.git prod

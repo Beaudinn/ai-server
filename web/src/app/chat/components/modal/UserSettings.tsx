@@ -1,4 +1,5 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useSWRConfig } from "swr";
 import { getDisplayNameForModel } from "@/lib/hooks";
 import { parseLlmDescriptor, structureValue } from "@/lib/llm/utils";
 import { setUserDefaultModel } from "@/lib/users/UserSettings";
@@ -32,12 +33,17 @@ import { useCCPairs } from "@/lib/hooks/useCCPairs";
 import { useLLMProviders } from "@/lib/hooks/useLLMProviders";
 import { useUserPersonalization } from "@/lib/hooks/useUserPersonalization";
 import { AutoResizeTextarea } from "@/components/ui/auto-resize-textarea";
+import Text from "@/refresh-components/texts/Text";
+import SvgXOctagon from "@/icons/x-octagon";
+import { PATManagement } from "@/components/user/PATManagement";
+import { errorHandlingFetcher } from "@/lib/fetcher";
 
 type SettingsSection =
   | "settings"
   | "password"
   | "connectors"
-  | "personalization";
+  | "personalization"
+  | "tokens";
 
 interface UserSettingsProps {
   onClose: () => void;
@@ -73,6 +79,13 @@ export function UserSettings({ onClose }: UserSettingsProps) {
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState<number | null>(null);
   const { popup, setPopup } = usePopup();
+  const { mutate: globalMutate } = useSWRConfig();
+
+  // Prefetch tokens when modal opens for instant display
+  useEffect(() => {
+    // Prefetch into SWR cache so PATManagement component has instant data
+    globalMutate("/api/user/pats", errorHandlingFetcher("/api/user/pats"));
+  }, []); // Only run once on mount
 
   // Fetch federated-connector info so the modal can list/refresh them
   const {
@@ -133,6 +146,9 @@ export function UserSettings({ onClose }: UserSettingsProps) {
     if (showPasswordSection) {
       visibleSections.push({ id: "password", label: "Password" });
     }
+
+    // Always show tokens tab
+    visibleSections.push({ id: "tokens", label: "Access Tokens" });
 
     // Always show Connectors tab, will be disabled if loading or no connectors
     visibleSections.push({ id: "connectors", label: "Connectors" });
@@ -546,6 +562,14 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 placeholder="Set how Onyx should refer to you"
                 className="mt-2"
               />
+              {personalizationValues.name.length === 0 && (
+                <div className="flex items-center gap-1 mt-1">
+                  <SvgXOctagon className="h-3 w-3 stroke-status-error-05" />
+                  <Text text03 secondaryBody>
+                    Please enter a name to continue.
+                  </Text>
+                </div>
+              )}
             </div>
             <div>
               <h3 className="text-lg font-medium">Role</h3>
@@ -604,7 +628,10 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 onClick={() => {
                   void handleSavePersonalization();
                 }}
-                disabled={isSavingPersonalization}
+                disabled={
+                  isSavingPersonalization ||
+                  personalizationValues.name.length === 0
+                }
               >
                 {isSavingPersonalization
                   ? "Saving Personalization..."
@@ -846,6 +873,16 @@ export function UserSettings({ onClose }: UserSettingsProps) {
                 </div>
               )}
             </div>
+          </div>
+        )}
+        {activeSection === "tokens" && (
+          <div>
+            <h2 className="text-xl font-bold mb-4">Personal Access Tokens</h2>
+            <p className="text-sm text-text-03 mb-4">
+              Create tokens to authenticate API requests. Tokens inherit all
+              your permissions.
+            </p>
+            <PATManagement />
           </div>
         )}
       </div>

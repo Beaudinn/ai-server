@@ -20,7 +20,6 @@ import {
   FormikProps,
   FastField,
 } from "formik";
-
 import { BooleanFormField, Label, TextFormField } from "@/components/Field";
 import { MemoizedToolList } from "@/components/admin/assistants/MemoizedToolCheckboxes";
 import {
@@ -30,7 +29,6 @@ import {
   TaskPromptField,
   MCPServerSection,
 } from "@/components/admin/assistants/FormSections";
-
 import { usePopup } from "@/components/admin/connectors/Popup";
 import { getDisplayNameForModel, useLabels } from "@/lib/hooks";
 import { DocumentSetSelectable } from "@/components/documentSet/DocumentSetSelectable";
@@ -42,13 +40,6 @@ import {
 } from "@/lib/llm/utils";
 import { ToolSnapshot, MCPServer } from "@/lib/tools/interfaces";
 import { checkUserIsNoAuthUser } from "@/lib/user";
-
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -82,7 +73,6 @@ import { buildImgUrl } from "@/app/chat/components/files/images/utils";
 import { debounce } from "lodash";
 import { LLMProviderView } from "@/app/admin/configuration/llm/interfaces";
 import StarterMessagesList from "@/app/admin/assistants/StarterMessageList";
-
 import { SwitchField } from "@/components/ui/switch";
 import { generateIdenticon } from "@/refresh-components/AgentIcon";
 import { BackButton } from "@/components/BackButton";
@@ -96,14 +86,13 @@ import {
 import { SourceChip } from "@/app/chat/components/input/ChatInputBar";
 import { FileCard } from "@/app/chat/components/input/FileCard";
 import { hasNonImageFiles } from "@/lib/utils";
-import CoreModal from "@/refresh-components/modals/CoreModal";
 import UserFilesModalContent from "@/components/modals/UserFilesModalContent";
 import { TagIcon, UserIcon, FileIcon, InfoIcon, BookIcon } from "lucide-react";
+import { useCreateModal } from "@/refresh-components/contexts/ModalContext";
 import { LLMSelector } from "@/components/llm/LLMSelector";
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 import { errorHandlingFetcher } from "@/lib/fetcher";
 import { ConfirmEntityModal } from "@/components/modals/ConfirmEntityModal";
-
 import {
   IMAGE_GENERATION_TOOL_ID,
   SEARCH_TOOL_ID,
@@ -125,6 +114,7 @@ import SvgFiles from "@/icons/files";
 import { useAgentsContext } from "@/refresh-components/contexts/AgentsContext";
 import Text from "@/refresh-components/texts/Text";
 import CreateButton from "@/refresh-components/buttons/CreateButton";
+import SimpleTooltip from "@/refresh-components/SimpleTooltip";
 
 function findSearchTool(tools: ToolSnapshot[]) {
   return tools.find((tool) => tool.in_code_tool_id === SEARCH_TOOL_ID);
@@ -151,16 +141,7 @@ function SubLabel({ children }: { children: string | JSX.Element }) {
   );
 }
 
-export function AssistantEditor({
-  existingPersona,
-  ccPairs,
-  documentSets,
-  user,
-  defaultPublic,
-  llmProviders,
-  tools,
-  shouldAddAssistantToUserPreferences,
-}: {
+export interface AssistantEditorProps {
   existingPersona?: FullPersona | null;
   ccPairs: CCPairBasicInfo[];
   documentSets: DocumentSetSummary[];
@@ -169,7 +150,18 @@ export function AssistantEditor({
   llmProviders: LLMProviderView[];
   tools: ToolSnapshot[];
   shouldAddAssistantToUserPreferences?: boolean;
-}) {
+}
+
+export default function AssistantEditor({
+  existingPersona,
+  ccPairs,
+  documentSets,
+  user,
+  defaultPublic,
+  llmProviders,
+  tools,
+  shouldAddAssistantToUserPreferences,
+}: AssistantEditorProps) {
   // NOTE: assistants = agents
   // TODO: rename everything to agents
   const { refreshAgents } = useAgentsContext();
@@ -195,7 +187,7 @@ export function AssistantEditor({
   const [presentingDocument, setPresentingDocument] =
     useState<MinimalOnyxDocument | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
-  const [showAllUserFiles, setShowAllUserFiles] = useState(false);
+  const userFilesModal = useCreateModal();
 
   // both `defautIconColor` and `defaultIconShape` are state so that they
   // persist across formik reformatting
@@ -217,6 +209,7 @@ export function AssistantEditor({
     [llmProviders.length]
   );
   const isUpdate = existingPersona !== undefined && existingPersona !== null;
+
   const defaultProvider = llmProviders.find(
     (llmProvider) => llmProvider.is_default_provider
   );
@@ -794,6 +787,14 @@ export function AssistantEditor({
 
             await refreshAgents();
 
+            // Force refetch LLM provider cache for this agent
+            // This ensures the chat page shows the updated provider list
+            await mutate(
+              `/api/llm/persona/${assistantId}/providers`,
+              undefined,
+              { revalidate: true }
+            );
+
             router.push(
               isAdminPage
                 ? `/admin/assistants?u=${Date.now()}`
@@ -845,6 +846,37 @@ export function AssistantEditor({
 
           return (
             <>
+              <userFilesModal.Provider>
+                <UserFilesModalContent
+                  title="User Files"
+                  description="All files selected for this assistant"
+                  icon={SvgFiles}
+                  recentFiles={values.user_file_ids.map(
+                    (userFileId: string) => {
+                      const rf = allRecentFiles.find(
+                        (f) => f.id === userFileId
+                      );
+                      return (
+                        rf || {
+                          id: userFileId,
+                          name: `File ${userFileId.slice(0, 8)}`,
+                          status: "completed" as const,
+                        }
+                      );
+                    }
+                  )}
+                  onDelete={(file) => {
+                    setFieldValue(
+                      "user_file_ids",
+                      values.user_file_ids.filter(
+                        (id: string) => id !== file.id
+                      )
+                    );
+                  }}
+                  onClose={() => userFilesModal.toggle(false)}
+                />
+              </userFilesModal.Provider>
+
               <Form className="w-full text-text-950 assistant-editor">
                 <FormErrorFocus />
                 {/* Refresh starter messages when name or description changes */}
@@ -993,68 +1025,56 @@ export function AssistantEditor({
                   <div className="flex flex-col">
                     <>
                       <Separator />
-                      <div className="flex gap-x-2 py-2 flex justify-start">
+                      <div className="flex gap-x-2 py-2 justify-start">
                         <div>
                           <div className="flex items-start gap-x-2">
                             <p className="block font-medium text-sm">
                               Knowledge
                             </p>
                             <div className="flex items-center">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <div
-                                      className={`${
-                                        !connectorsExist || !searchTool
-                                          ? "opacity-70 cursor-not-allowed"
-                                          : ""
-                                      }`}
-                                    >
-                                      <FastField
+                              <SimpleTooltip
+                                tooltip="To use Knowledge, you need to have at least one Connector configured. You can still upload user files to the agent below."
+                                side="top"
+                                align="center"
+                                disabled={connectorsExist}
+                              >
+                                <div
+                                  className={`${
+                                    !connectorsExist || !searchTool
+                                      ? "opacity-70 cursor-not-allowed"
+                                      : ""
+                                  }`}
+                                >
+                                  <FastField
+                                    name={`enabled_tools_map.${
+                                      // -1 is a placeholder -- this section
+                                      // should be disabled anyways if no search tool
+                                      searchTool?.id || -1
+                                    }`}
+                                  >
+                                    {({ form }: any) => (
+                                      <SwitchField
+                                        size="sm"
+                                        onCheckedChange={(checked: boolean) => {
+                                          form.setFieldValue(
+                                            "num_chunks",
+                                            null
+                                          );
+                                          toggleToolInValues(
+                                            searchTool?.id || -1
+                                          );
+                                        }}
                                         name={`enabled_tools_map.${
-                                          // -1 is a placeholder -- this section
-                                          // should be disabled anyways if no search tool
                                           searchTool?.id || -1
                                         }`}
-                                      >
-                                        {({ form }: any) => (
-                                          <SwitchField
-                                            size="sm"
-                                            onCheckedChange={(
-                                              checked: boolean
-                                            ) => {
-                                              form.setFieldValue(
-                                                "num_chunks",
-                                                null
-                                              );
-                                              toggleToolInValues(
-                                                searchTool?.id || -1
-                                              );
-                                            }}
-                                            name={`enabled_tools_map.${
-                                              searchTool?.id || -1
-                                            }`}
-                                            disabled={
-                                              !connectorsExist || !searchTool
-                                            }
-                                          />
-                                        )}
-                                      </FastField>
-                                    </div>
-                                  </TooltipTrigger>
-
-                                  {!connectorsExist && (
-                                    <TooltipContent side="top" align="center">
-                                      <Text inverted>
-                                        To use Knowledge, you need to have at
-                                        least one Connector configured. You can
-                                        still upload user files to the agent
-                                        below.
-                                      </Text>
-                                    </TooltipContent>
-                                  )}
-                                </Tooltip>
-                              </TooltipProvider>
+                                        disabled={
+                                          !connectorsExist || !searchTool
+                                        }
+                                      />
+                                    )}
+                                  </FastField>
+                                </div>
+                              </SimpleTooltip>
                             </div>
                           </div>
                         </div>
@@ -1173,7 +1193,9 @@ export function AssistantEditor({
                                     <button
                                       type="button"
                                       className="rounded-xl px-3 py-1 text-left transition-colors hover:bg-background-tint-02"
-                                      onClick={() => setShowAllUserFiles(true)}
+                                      onClick={() =>
+                                        userFilesModal.toggle(true)
+                                      }
                                     >
                                       <div className="flex flex-col overflow-hidden h-12 p-1">
                                         <div className="flex items-center justify-between gap-2 w-full">
@@ -1388,7 +1410,7 @@ export function AssistantEditor({
                                 <BooleanFormField
                                   name={`enabled_tools_map.${imageGenerationTool.id}`}
                                   label={imageGenerationTool.display_name}
-                                  subtext="Generate and manipulate images using AI-powered tools"
+                                  subtext="Generate and manipulate images using AI-powered tools."
                                   disabled={!currentLLMSupportsImageOutput}
                                   disabledTooltip={
                                     !currentLLMSupportsImageOutput
@@ -1483,12 +1505,19 @@ export function AssistantEditor({
                   <LLMSelector
                     llmProviders={llmProviders}
                     currentLlm={
-                      values.llm_model_version_override
-                        ? structureValue(
-                            values.llm_model_provider_override,
-                            "",
-                            values.llm_model_version_override
-                          )
+                      values.llm_model_version_override &&
+                      values.llm_model_provider_override
+                        ? (() => {
+                            const provider = llmProviders.find(
+                              (p) =>
+                                p.name === values.llm_model_provider_override
+                            );
+                            return structureValue(
+                              values.llm_model_provider_override,
+                              provider?.provider || "",
+                              values.llm_model_version_override
+                            );
+                          })()
                         : null
                     }
                     requiresImageGeneration={
@@ -1501,7 +1530,7 @@ export function AssistantEditor({
                         setFieldValue("llm_model_version_override", null);
                         setFieldValue("llm_model_provider_override", null);
                       } else {
-                        const { modelName, provider, name } =
+                        const { modelName, name } =
                           parseLlmDescriptor(selected);
                         if (modelName && name) {
                           setFieldValue(
@@ -1548,48 +1577,38 @@ export function AssistantEditor({
 
                       <div className="min-h-[100px]">
                         <div className="flex items-center mb-2">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div>
-                                  <SwitchField
-                                    name="is_public"
-                                    size="md"
-                                    onCheckedChange={(checked) => {
-                                      if (
-                                        values.is_default_persona &&
-                                        !checked
-                                      ) {
-                                        setShowVisibilityWarning(true);
-                                      } else {
-                                        setFieldValue("is_public", checked);
-                                        if (!checked) {
-                                          // Even though this code path should not be possible,
-                                          // we set the default persona to false to be safe
-                                          setFieldValue(
-                                            "is_default_persona",
-                                            false
-                                          );
-                                        }
-                                        if (checked) {
-                                          setFieldValue("selectedUsers", []);
-                                          setFieldValue("selectedGroups", []);
-                                        }
-                                      }
-                                    }}
-                                    disabled={values.is_default_persona}
-                                  />
-                                </div>
-                              </TooltipTrigger>
-                              {values.is_default_persona && (
-                                <TooltipContent side="top" align="center">
-                                  Default persona must be public. Set
-                                  &quot;Default Persona&quot; to false to change
-                                  visibility.
-                                </TooltipContent>
-                              )}
-                            </Tooltip>
-                          </TooltipProvider>
+                          <SimpleTooltip
+                            tooltip='Default persona must be public. Set "Default Persona" to false to change visibility.'
+                            disabled={!values.is_default_persona}
+                            side="top"
+                          >
+                            <div>
+                              <SwitchField
+                                name="is_public"
+                                size="md"
+                                onCheckedChange={(checked) => {
+                                  if (values.is_default_persona && !checked) {
+                                    setShowVisibilityWarning(true);
+                                  } else {
+                                    setFieldValue("is_public", checked);
+                                    if (!checked) {
+                                      // Even though this code path should not be possible,
+                                      // we set the default persona to false to be safe
+                                      setFieldValue(
+                                        "is_default_persona",
+                                        false
+                                      );
+                                    }
+                                    if (checked) {
+                                      setFieldValue("selectedUsers", []);
+                                      setFieldValue("selectedGroups", []);
+                                    }
+                                  }
+                                }}
+                                disabled={values.is_default_persona}
+                              />
+                            </div>
+                          </SimpleTooltip>
                           <span className="text-sm ml-2">
                             Organization Public
                           </span>
@@ -1941,41 +1960,6 @@ export function AssistantEditor({
                   </div>
                 </div>
               </Form>
-              {showAllUserFiles && (
-                <CoreModal
-                  className="w-full max-w-lg"
-                  onClickOutside={() => setShowAllUserFiles(false)}
-                >
-                  <UserFilesModalContent
-                    title="User Files"
-                    description="All files selected for this assistant"
-                    icon={SvgFiles}
-                    recentFiles={values.user_file_ids.map(
-                      (userFileId: string) => {
-                        const rf = allRecentFiles.find(
-                          (f) => f.id === userFileId
-                        );
-                        return (
-                          rf || {
-                            id: userFileId,
-                            name: `File ${userFileId.slice(0, 8)}`,
-                            status: "completed" as const,
-                          }
-                        );
-                      }
-                    )}
-                    onDelete={(file) => {
-                      setFieldValue(
-                        "user_file_ids",
-                        values.user_file_ids.filter(
-                          (id: string) => id !== file.id
-                        )
-                      );
-                    }}
-                    onClose={() => setShowAllUserFiles(false)}
-                  />
-                </CoreModal>
-              )}
             </>
           );
         }}
